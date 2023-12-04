@@ -81,5 +81,6 @@ def run():
 if __name__ == "__main__":
     sio.on('connect', connect)
     sio.on('wake_word_detected', wake_word_detected)
-    sio.connect("http://localhost:5001")
+    # Connect to the server on the local network with port 5001 and /wake-word-detection namespace
+    sio.connect('http://localhost:5001/wake-word-detection')
     sio.wait()
