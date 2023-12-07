@@ -49,10 +49,16 @@ class WakeWordService:
 
 class CommandService:
     def __init__(self, url, path):
-        self.client = SocketIOClient(url, socketio_path=path)
+        self.client = SocketIOClient(url, socketio_path=path, event_callbacks={
+            'command_detected': self.command_detected
+        })
         self.client.connect()
         self.audio_recorder = None
         self.shared_audio_buffer = None
+
+    def command_detected(self, data):
+        print("Command detected")
+        print(data)
 
     def handle_wake_word_detected(self, frame_id):
         print("Handling wake word detected")
@@ -73,6 +79,7 @@ class CommandService:
             self.stream_audio_frame(frame)
             if time.time() - self.audio_recorder.vad.last_voice_detected_time > VAD_TIMEOUT:
                 self.audio_recorder.stop_recording()
+                self.client.client.emit('process_command', {})
                 return False
         return True
     
