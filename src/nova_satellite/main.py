@@ -28,13 +28,14 @@ class WakeWordService:
         frame_id = data['frame_id']
         print(f"Wake word detected on frame {frame_id}")
         print(data)
-        self.is_wake_word_detected = True    
-        self.audio_recorder.start_recording()
-        for frame in self.shared_audio_buffer.get_cached_frames_since(frame_id):
-            self.audio_recorder.process_audio_data(frame['data'])
+        self.is_wake_word_detected = True           
 
-    def stream_audio(self, audio_buffer):
-        frame = audio_buffer.read()
+        # Trigger event to CommandService
+        if self.on_wake_word_detected:
+            self.on_wake_word_detected(frame_id)
+
+    def stream_audio(self):
+        frame = self.shared_audio_buffer.read()
         if frame:
             self.client.client.emit('stream_audio', frame)
 
@@ -42,20 +43,46 @@ class WakeWordService:
         self.audio_recorder = recorder
         self.shared_audio_buffer = buffer
 
+    # Event listener setter
+    def set_on_wake_word_detected_listener(self, listener):
+        self.on_wake_word_detected = listener
+
 class CommandService:
     def __init__(self, url, path):
         self.client = SocketIOClient(url, socketio_path=path)
         self.client.connect()
+        self.audio_recorder = None
+        self.shared_audio_buffer = None
 
-    def stream_audio(self, audio_recorder, audio_buffer):
-        frame = audio_buffer.read()
+    def handle_wake_word_detected(self, frame_id):
+        print("Handling wake word detected")
+
+        # Check if there is an active recording
+        if self.audio_recorder.is_recording:
+            print("Recording already in progress")
+        
+        self.audio_recorder.start_recording()
+
+        for frame in self.shared_audio_buffer.get_cached_frames_since(frame_id):
+            print("Sending audio frame from past")
+            self.stream_audio_frame(frame)
+
+    def stream_audio(self):
+        frame = self.shared_audio_buffer.read()
         if frame:
-            audio_recorder.process_audio_data(frame['data'])
-            self.client.client.emit('stream_audio', frame)
-            if time.time() - audio_recorder.vad.last_voice_detected_time > VAD_TIMEOUT:
-                audio_recorder.stop_recording()
+            self.stream_audio_frame(frame)
+            if time.time() - self.audio_recorder.vad.last_voice_detected_time > VAD_TIMEOUT:
+                self.audio_recorder.stop_recording()
                 return False
         return True
+    
+    def stream_audio_frame(self, frame):
+        self.audio_recorder.process_audio_data(frame['data'])
+        self.client.client.emit('stream_audio', frame)
+    
+    def set_recorder_and_buffer(self, recorder, buffer):
+        self.audio_recorder = recorder
+        self.shared_audio_buffer = buffer
 
 def main():
     audio_stream = AudioStream(FORMAT, CHANNELS, RATE, CHUNK)
@@ -64,8 +91,14 @@ def main():
 
     wake_word_service = WakeWordService('http://localhost', '/wake-word-detection')
     command_service = CommandService('http://localhost', '/command-processing')
+
+    # Set up event listener for wake word detection
+    wake_word_service.set_on_wake_word_detected_listener(
+        command_service.handle_wake_word_detected
+    )
     
     wake_word_service.set_recorder_and_buffer(audio_recorder, shared_audio_buffer)
+    command_service.set_recorder_and_buffer(audio_recorder, shared_audio_buffer)
 
     try:
         audio_stream.start_stream()
@@ -73,9 +106,9 @@ def main():
             data = audio_stream.read_data()
             shared_audio_buffer.update(data)
 
-            wake_word_service.stream_audio(shared_audio_buffer)
+            wake_word_service.stream_audio()
             if wake_word_service.is_wake_word_detected:
-                continue_streaming = command_service.stream_audio(audio_recorder, shared_audio_buffer)
+                continue_streaming = command_service.stream_audio()
                 if not continue_streaming:
                     wake_word_service.is_wake_word_detected = False
     except KeyboardInterrupt:
