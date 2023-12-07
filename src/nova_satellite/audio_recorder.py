@@ -27,7 +27,7 @@ class AudioRecorder:
         self.frames.clear()
 
     def save_recording(self):
-        filepath = os.path.join(os.path.dirname(__file__), 'recording.wav')
+        filepath = os.path.join(os.path.dirname(__file__), '../../..', 'Recordings', 'recording.wav')
         with wave.open(filepath, 'wb') as wf:
             wf.setnchannels(self.channels)
             wf.setsampwidth(pyaudio.PyAudio().get_sample_size(self.format))
