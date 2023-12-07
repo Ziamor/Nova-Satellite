@@ -2,8 +2,8 @@ import os
 import time
 import wave
 import pyaudio
-import socketio
 import webrtcvad
+from nova_satellite.voice_activity_detector import VoiceActivityDetector
 
 class AudioRecorder:
     def __init__(self, format, channels, rate, frame_duration_ms, vad_aggressiveness):
@@ -11,16 +11,17 @@ class AudioRecorder:
         self.channels = channels
         self.rate = rate
         self.chunk = int(rate * frame_duration_ms / 1000)
-        self.vad = webrtcvad.Vad(vad_aggressiveness)
+        self.vad = VoiceActivityDetector(rate, vad_aggressiveness)
         self.frames = []
-        self.is_recording = False
-        self.last_voice_detected_time = None
+        self.is_recording = False        
 
     def start_recording(self):
+        print("Recording started")
         self.is_recording = True
-        self.last_voice_detected_time = time.time()
+        self.vad.last_voice_detected_time = time.time()
 
     def stop_recording(self):
+        print("Recording stopped")
         self.is_recording = False
         self.save_recording()
         self.frames.clear()
@@ -35,6 +36,5 @@ class AudioRecorder:
         print("Recording saved")
 
     def process_audio_data(self, data):
-        if self.vad.is_speech(data, self.rate):
-            self.last_voice_detected_time = time.time()
+        if self.vad.process_audio_data(data):
             self.frames.append(data)

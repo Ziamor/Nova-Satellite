@@ -1,38 +1,89 @@
 import pyaudio
-from nova_satellite.audio_recorder import AudioRecorder
-from nova_satellite.audio_stream import AudioStreamThread
+import time
+import sys
 from nova_satellite.socket_io_client import SocketIOClient
+from nova_satellite.audio_stream import AudioStream
+from nova_satellite.audio_recorder import AudioRecorder
+from nova_satellite.shared_audio_buffer import SharedAudioBuffer
 
+# Constants
 FORMAT = pyaudio.paInt16
 CHANNELS = 1 # Mono
 RATE = 16000 # Sample rate in Hz
-FRAME_DURATION_MS = 30  # Frame duration in ms, needs to be either 10, 20, or 30 ms for VAD to work properly
-VAD_MODE = 1 # 0 to 3, 0 is the least aggressive about filtering out non-speech, 3 is the most aggressive
+FRAME_DURATION_MS = 30  # Frame duration in ms
+CHUNK = int(RATE * FRAME_DURATION_MS / 1000)
+VAD_TIMEOUT = 3 # Seconds
+
+class WakeWordService:
+    def __init__(self, url, path):
+        self.client = SocketIOClient(url, socketio_path=path, event_callbacks={
+            'wake_word_detected': self.wake_word_detected
+        })
+        self.client.connect()
+        self.is_wake_word_detected = False
+        self.audio_recorder = None
+        self.shared_audio_buffer = None
+
+    def wake_word_detected(self, data):
+        frame_id = data['frame_id']
+        print(f"Wake word detected on frame {frame_id}")
+        print(data)
+        self.is_wake_word_detected = True    
+        self.audio_recorder.start_recording()
+        for frame in self.shared_audio_buffer.get_cached_frames_since(frame_id):
+            self.audio_recorder.process_audio_data(frame['data'])
+
+    def stream_audio(self, audio_buffer):
+        frame = audio_buffer.read()
+        if frame:
+            self.client.client.emit('stream_audio', frame)
+
+    def set_recorder_and_buffer(self, recorder, buffer):
+        self.audio_recorder = recorder
+        self.shared_audio_buffer = buffer
+
+class CommandService:
+    def __init__(self, url, path):
+        self.client = SocketIOClient(url, socketio_path=path)
+        self.client.connect()
+
+    def stream_audio(self, audio_recorder, audio_buffer):
+        frame = audio_buffer.read()
+        if frame:
+            audio_recorder.process_audio_data(frame['data'])
+            self.client.client.emit('stream_audio', frame)
+            if time.time() - audio_recorder.vad.last_voice_detected_time > VAD_TIMEOUT:
+                audio_recorder.stop_recording()
+                return False
+        return True
 
 def main():
-    recorder = AudioRecorder(pyaudio.paInt16, CHANNELS, RATE, FRAME_DURATION_MS, VAD_MODE)
-    
-	# Initialize SocketIOClient with a callback to start recording
-    socket_client = SocketIOClient('http://localhost', ['/wake-word-detection'], wake_word_callback=recorder.start_recording)
-    socket_client.connect()
+    audio_stream = AudioStream(FORMAT, CHANNELS, RATE, CHUNK)
+    audio_recorder = AudioRecorder(FORMAT, CHANNELS, RATE, FRAME_DURATION_MS, 3)
+    shared_audio_buffer = SharedAudioBuffer()
 
-    # Initialize and start the AudioStreamThread
-    audio_interface = pyaudio.PyAudio()
-    stream = audio_interface.open(format=recorder.format, channels=recorder.channels, rate=recorder.rate, input=True, frames_per_buffer=recorder.chunk)
-    audio_thread = AudioStreamThread(recorder, audio_interface, stream, socket_client.client)
-    audio_thread.start()
+    wake_word_service = WakeWordService('http://localhost', '/wake-word-detection')
+    command_service = CommandService('http://localhost', '/command-processing')
+    
+    wake_word_service.set_recorder_and_buffer(audio_recorder, shared_audio_buffer)
 
     try:
-        socket_client.wait()
-    except KeyboardInterrupt:
-        print("Application interrupted, cleaning up...")
-        cleanup(audio_thread, socket_client)
+        audio_stream.start_stream()
+        while True:
+            data = audio_stream.read_data()
+            shared_audio_buffer.update(data)
 
-def cleanup(audio_thread, socket_client):
-    audio_thread.stop()
-    audio_thread.join()
-    socket_client.disconnect()
+            wake_word_service.stream_audio(shared_audio_buffer)
+            if wake_word_service.is_wake_word_detected:
+                continue_streaming = command_service.stream_audio(audio_recorder, shared_audio_buffer)
+                if not continue_streaming:
+                    wake_word_service.is_wake_word_detected = False
+    except KeyboardInterrupt:
+        print("Stopping...")
+    finally:
+        audio_stream.stop_stream()
+        wake_word_service.client.disconnect()
+        command_service.client.disconnect()
 
 if __name__ == '__main__':
     main()
-

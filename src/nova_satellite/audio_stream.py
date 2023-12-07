@@ -1,37 +1,25 @@
-import threading
-import time
+import pyaudio
 
-class AudioStreamThread(threading.Thread):
-    def __init__(self, recorder, audio_interface, stream, sio):
-        super().__init__()
-        self.recorder = recorder
-        self.audio_interface = audio_interface
-        self.stream = stream
-        self.sio = sio
+class AudioStream:
+    def __init__(self, format=pyaudio.paInt16, channels=1, rate=16000, chunk=1600):
+        self.format = format
+        self.channels = channels
+        self.rate = rate
+        self.chunk = chunk
+        
+        self.audio = pyaudio.PyAudio()
+        self.stream = None
+        self.is_recording = False
 
-    def run(self):
-        print("Ready to detect wake word...")
-        try:
-            while True:
-                data = self.stream.read(self.recorder.chunk)
-                # Emit audio data to server...
-                self.sio.emit('stream_audio', data)
+    def start_stream(self):
+        self.stream = self.audio.open(format=self.format, channels=self.channels, rate=self.rate, input=True, frames_per_buffer=self.chunk)
+        self.is_recording = True
 
-                if self.recorder.is_recording:
-                    self.recorder.process_audio_data(data)
-                    if time.time() - self.recorder.last_voice_detected_time > 2:  # SILENCE_TIMEOUT
-                        self.recorder.stop_recording()
+    def read_data(self):
+        return self.stream.read(self.chunk, exception_on_overflow=False)
 
-        except Exception as e:
-            print("Exception in sending data:", e)
-        finally:
-            self.stream.stop_stream()
-            self.stream.close()
-            self.audio_interface.terminate()
-            print("Thread terminating...")
-            
-    def stop(self):
+    def stop_stream(self):
+        self.is_recording = False
         self.stream.stop_stream()
         self.stream.close()
-        self.audio_interface.terminate()
-        print("Thread terminating...")
+        self.audio.terminate()
