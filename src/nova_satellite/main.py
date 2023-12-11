@@ -1,10 +1,12 @@
 import pyaudio
 import time
-import sys
 from nova_satellite.socket_io_client import SocketIOClient
 from nova_satellite.audio_stream import AudioStream
 from nova_satellite.audio_recorder import AudioRecorder
 from nova_satellite.shared_audio_buffer import SharedAudioBuffer
+
+import pyttsx3
+import re
 
 # Constants
 FORMAT = pyaudio.paInt16
@@ -56,9 +58,28 @@ class CommandService:
         self.audio_recorder = None
         self.shared_audio_buffer = None
 
+    def clean_string(input_string):
+        # Replace newline characters with a space
+        cleaned = input_string.replace('\n', ' ')
+        
+        # Handle escape characters like \'
+        cleaned = cleaned.replace('\\\'', '\'')
+        
+        # Remove extra spaces created by replacements
+        cleaned = re.sub(' +', ' ', cleaned)
+
+        return cleaned
+    
     def command_detected(self, data):
         print("Command detected")
         print(data)
+        command = data['command']
+        command = CommandService.clean_string(command)
+        if command:
+            #text to speech
+            engine = pyttsx3.init()
+            engine.say(command)
+            engine.runAndWait()
 
     def handle_wake_word_detected(self, frame_id):
         print("Handling wake word detected")
